@@ -1,0 +1,23 @@
+[Unit]
+Description=FonoScreen – Kiosk server de cribado fonológico
+After=network.target
+# En el Pi, esperar a que el hotspot esté activo:
+# After=network.target hostapd.service dnsmasq.service
+
+[Service]
+Type=simple
+User=fonoscreen
+# Ajustar la ruta si el proyecto está en otro directorio
+WorkingDirectory=/home/fonoscreen/fonoscreen
+Environment="FLASK_ENV=production"
+Environment="PORT=80"
+# Si el puerto es 80 se necesita net_bind_service o usar Authbind/nginx
+# Para desarrollo/pruebas en puerto alto (5000), quitar la línea de PORT=80
+ExecStart=/home/fonoscreen/fonoscreen/venv/bin/python app.py
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:/home/fonoscreen/fonoscreen/logs/server.log
+StandardError=append:/home/fonoscreen/fonoscreen/logs/server.log
+
+[Install]
+WantedBy=multi-user.target

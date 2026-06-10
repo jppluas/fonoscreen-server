@@ -1,0 +1,134 @@
+{% extends "base.html" %}
+{% block title %}Registro — FonoScreen{% endblock %}
+
+{% block header_action %}
+<a href="{{ url_for('device_panel') }}" class="header-action">⚙ Dispositivo</a>
+{% endblock %}
+
+{% block content %}
+
+<div class="card">
+  <div class="card-header">
+    <span class="card-icon blue">👤</span>
+    <div>
+      <p class="card-title">Datos del niño</p>
+      <p class="card-subtitle">Complete antes de iniciar la evaluación</p>
+    </div>
+  </div>
+
+  <div style="display:flex; flex-direction:column; gap:14px;">
+    <div class="field">
+      <label for="f-name">Nombre completo</label>
+      <input type="text" id="f-name" placeholder="Ej. María José Vargas" autocomplete="off"
+             autocorrect="off" spellcheck="false" inputmode="text">
+    </div>
+
+    <div class="field-row">
+      <div class="field">
+        <label for="f-dob">Fecha de nacimiento</label>
+        <input type="date" id="f-dob" max="{{ today }}">
+      </div>
+      <div class="field">
+        <label for="f-gender">Género</label>
+        <select id="f-gender">
+          <option value="">—</option>
+          <option value="F">Femenino</option>
+          <option value="M">Masculino</option>
+          <option value="O">Otro</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="field">
+      <label for="f-notes">Anamnesis / observaciones <span style="font-weight:400;color:var(--gray-400)">(opcional)</span></label>
+      <textarea id="f-notes" placeholder="Historial relevante, condiciones conocidas, etc."></textarea>
+    </div>
+  </div>
+</div>
+
+<div id="age-display" style="display:none;" class="card" style="padding:14px 20px;">
+  <div style="display:flex; align-items:center; justify-content:space-between;">
+    <span style="font-size:0.85rem; color:var(--gray-700);">Edad calculada</span>
+    <span id="age-text" class="badge badge-teal" style="font-family:var(--font-mono);"></span>
+  </div>
+  <div id="age-warning" style="display:none; margin-top:10px; font-size:0.82rem; color:#92600A;
+       background:var(--amber-light); border-radius:8px; padding:10px 12px; line-height:1.45;">
+    ⚠ Esta evaluación está diseñada para niños de 3 a 5 años. Confirme la fecha de nacimiento.
+  </div>
+</div>
+
+<button class="btn btn-primary btn-full btn-lg" id="btn-start" disabled>
+  Iniciar evaluación
+</button>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  const nameEl   = document.getElementById("f-name");
+  const dobEl    = document.getElementById("f-dob");
+  const genderEl = document.getElementById("f-gender");
+  const notesEl  = document.getElementById("f-notes");
+  const btnStart = document.getElementById("btn-start");
+  const ageDisp  = document.getElementById("age-display");
+  const ageText  = document.getElementById("age-text");
+  const ageWarn  = document.getElementById("age-warning");
+
+  // Establece hoy como máximo en el campo fecha
+  dobEl.max = new Date().toISOString().split("T")[0];
+
+  function calcAge(dobStr) {
+    if (!dobStr) return null;
+    const dob  = new Date(dobStr + "T00:00:00");
+    const now  = new Date();
+    let years  = now.getFullYear() - dob.getFullYear();
+    let months = now.getMonth() - dob.getMonth();
+    if (months < 0) { years--; months += 12; }
+    return { years, months, total: years * 12 + months };
+  }
+
+  function validate() {
+    const name   = nameEl.value.trim();
+    const dob    = dobEl.value;
+    const gender = genderEl.value;
+    const age    = calcAge(dob);
+
+    if (dob && age) {
+      ageDisp.style.display = "block";
+      ageText.textContent = `${age.years} años ${age.months} meses`;
+      const outOfRange = age.total < 36 || age.total > 71;
+      ageWarn.style.display = outOfRange ? "block" : "none";
+    } else {
+      ageDisp.style.display = "none";
+    }
+
+    btnStart.disabled = !(name.length >= 2 && dob && gender);
+  }
+
+  [nameEl, dobEl, genderEl].forEach(el => el.addEventListener("input", validate));
+  validate();
+
+  btnStart.addEventListener("click", async () => {
+    const name   = nameEl.value.trim();
+    const dob    = dobEl.value;
+    const gender = genderEl.value;
+    const notes  = notesEl.value.trim();
+
+    btnStart.disabled = true;
+    btnStart.innerHTML = '<span class="spinner"></span> Iniciando...';
+
+    const { ok, data } = await FS.api("/api/session/start", "POST",
+      { name, dob, gender, notes });
+
+    if (ok && data.ok) {
+      window.location.href = "/sesion";
+    } else {
+      FS.showToast(data.error || "Error al iniciar la sesión.", "error");
+      btnStart.disabled = false;
+      btnStart.textContent = "Iniciar evaluación";
+    }
+  });
+})();
+</script>
+{% endblock %}

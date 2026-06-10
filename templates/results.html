@@ -1,0 +1,132 @@
+{% extends "base.html" %}
+{% block title %}Resultado — FonoScreen{% endblock %}
+
+{% block header_action %}
+<span class="badge badge-teal" style="font-family:var(--font-mono); font-size:0.75rem;">
+  {% if state.session_id %}#{{ state.session_id }}{% endif %}
+</span>
+{% endblock %}
+
+{% block content %}
+
+<!-- Score principal -->
+<div class="card" style="text-align:center;">
+  <div class="card-header" style="justify-content:center; margin-bottom:20px;">
+    <span class="card-icon teal">📊</span>
+    <div>
+      <p class="card-title">Resultado de evaluación</p>
+      <p class="card-subtitle">
+        {{ state.child.name if state.child }} ·
+        {% if state.started_at %}
+          {{ state.started_at[:10] }}
+        {% endif %}
+      </p>
+    </div>
+  </div>
+
+  <div class="score-ring-wrap">
+    <div class="score-ring">
+      <svg viewBox="0 0 120 120" width="120" height="120">
+        <circle cx="60" cy="60" r="52" fill="none"
+                stroke="var(--gray-100)" stroke-width="12"/>
+        <circle cx="60" cy="60" r="52" fill="none"
+                stroke="var(--teal)" stroke-width="12"
+                stroke-linecap="round"
+                stroke-dasharray="327"
+                stroke-dashoffset="{{ 327 - (327 * (state.results.score / 100)) | int if state.results else 327 }}"
+                id="score-arc"/>
+      </svg>
+      <div class="score-text">
+        <span id="score-num">{{ state.results.score if state.results else '—' }}</span>
+        <small>/ 100</small>
+      </div>
+    </div>
+    <p id="score-level" style="font-size:0.9rem; font-weight:600; color:var(--blue);
+       text-align:center; max-width:220px; line-height:1.4;">
+      {{ state.results.level if state.results else '—' }}
+    </p>
+  </div>
+</div>
+
+<!-- Detalle por fonema -->
+{% if state.results and state.results.details %}
+<div class="card">
+  <div class="card-header">
+    <span class="card-icon teal">🔤</span>
+    <div>
+      <p class="card-title">Detalle por fonema</p>
+      <p class="card-subtitle">Desempeño individual</p>
+    </div>
+  </div>
+
+  {% for item in state.results.details %}
+  <div class="phoneme-row">
+    <span class="phoneme-sym">{{ item.phoneme }}</span>
+    <div class="phoneme-bar-wrap">
+      <div class="progress-track">
+        <div class="progress-fill" style="width:{{ item.score }}%;
+          background: {% if item.score < 60 %}linear-gradient(90deg,var(--red),#e74c3c)
+          {% elif item.score < 80 %}linear-gradient(90deg,var(--amber),#f39c12)
+          {% else %}linear-gradient(90deg,var(--teal),var(--blue-mid)){% endif %};">
+        </div>
+      </div>
+    </div>
+    <span class="phoneme-score" style="color:
+      {% if item.score < 60 %}var(--red)
+      {% elif item.score < 80 %}#92600A
+      {% else %}var(--teal){% endif %};">
+      {{ item.score }}%
+    </span>
+    <span class="phoneme-flag">{{ '⚠️' if item.flag else '' }}</span>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+<!-- Descarga de informes -->
+<div class="card">
+  <div class="card-header">
+    <span class="card-icon blue">📄</span>
+    <div>
+      <p class="card-title">Informes</p>
+      <p class="card-subtitle">Descargue para compartir o archivar</p>
+    </div>
+  </div>
+
+  <div style="display:flex; flex-direction:column; gap:10px;">
+    <a href="/api/report/tecnico" class="btn btn-blue btn-full">
+      ⬇ Informe técnico (PDF)
+    </a>
+    <a href="/api/report/representantes" class="btn btn-outline btn-full">
+      ⬇ Informe para representantes (PDF)
+    </a>
+  </div>
+</div>
+
+<!-- Nueva sesión -->
+<button class="btn btn-primary btn-full btn-lg" id="btn-new">
+  + Nueva evaluación
+</button>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  // Animación del arco del score al cargar
+  const arc   = document.getElementById("score-arc");
+  const score = {{ state.results.score if state.results else 0 }};
+  if (arc && score) {
+    const target = 327 - (327 * score / 100);
+    arc.style.transition = "stroke-dashoffset 1s ease";
+    setTimeout(() => { arc.style.strokeDashoffset = target; }, 100);
+  }
+
+  // Nueva sesión
+  document.getElementById("btn-new").addEventListener("click", async () => {
+    await FS.api("/api/session/reset", "POST");
+    window.location.href = "/registro";
+  });
+})();
+</script>
+{% endblock %}

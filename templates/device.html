@@ -1,0 +1,380 @@
+{% extends "base.html" %}
+{% block title %}Dispositivo — FonoScreen{% endblock %}
+
+{% block header_action %}
+<a href="/" class="header-action">← Sesión</a>
+{% endblock %}
+
+{% block content %}
+
+<!-- Estado del sistema -->
+<div class="card">
+  <div class="card-header">
+    <span class="card-icon blue">📡</span>
+    <div>
+      <p class="card-title">Estado del sistema</p>
+      <p class="card-subtitle">
+        {{ 'Raspberry Pi' if is_pi else 'Laptop / desarrollo' }}
+      </p>
+    </div>
+  </div>
+  <div>
+    <div class="status-row">
+      <span class="status-key">Servidor activo hace</span>
+      <span class="status-val" id="sys-uptime">{{ uptime }}</span>
+    </div>
+    <div class="status-row">
+      <span class="status-key">Espacio libre en disco</span>
+      <span class="status-val">{{ disk.free }} (de {{ disk.total }})</span>
+    </div>
+    <div class="status-row">
+      <span class="status-key">Uso de disco</span>
+      <span class="status-val">{{ disk.percent }}</span>
+    </div>
+    <div class="status-row">
+      <span class="status-key">Hora del servidor</span>
+      <span class="status-val" id="sys-time">—</span>
+    </div>
+  </div>
+</div>
+
+<!-- Volumen -->
+<div class="card">
+  <div class="card-header">
+    <span class="card-icon teal">🔊</span>
+    <div>
+      <p class="card-title">Volumen del parlante</p>
+      <p class="card-subtitle">Ajuste según el ruido del aula</p>
+    </div>
+  </div>
+  <div class="slider-wrap">
+    <span style="font-size:1.1rem;">🔈</span>
+    <input type="range" class="volume-slider" id="vol-slider" min="0" max="100" value="80">
+    <span class="volume-label" id="vol-label">80%</span>
+    <span style="font-size:1.1rem;">🔊</span>
+  </div>
+  <p id="vol-status" style="margin-top:10px; font-size:0.78rem; color:var(--gray-400); text-align:center; min-height:18px;"></p>
+</div>
+
+<!-- Prueba de parlante -->
+<div class="card">
+  <div class="card-header">
+    <span class="card-icon teal">🔔</span>
+    <div>
+      <p class="card-title">Prueba de parlante</p>
+      <p class="card-subtitle">Reproduce un tono para verificar el audio</p>
+    </div>
+  </div>
+  <button class="btn btn-blue btn-full" id="btn-tone">
+    🔔 Reproducir tono de prueba
+  </button>
+  <p id="tone-status" style="margin-top:10px; font-size:0.78rem; color:var(--gray-400); text-align:center; min-height:18px;"></p>
+</div>
+
+<!-- Prueba de micrófono -->
+<div class="card">
+  <div class="card-header">
+    <span class="card-icon teal">🎙️</span>
+    <div>
+      <p class="card-title">Prueba de micrófono</p>
+      <p class="card-subtitle">Graba y luego escucha por el parlante del dispositivo</p>
+    </div>
+  </div>
+
+  <!-- Estado visual -->
+  <div id="mic-state-display" style="
+    background: var(--gray-100);
+    border-radius: var(--radius-sm);
+    padding: 16px;
+    text-align: center;
+    margin-bottom: 14px;
+    min-height: 72px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;">
+    <span id="mic-icon" style="font-size:1.8rem;">🎙️</span>
+    <span id="mic-label" style="font-size:0.85rem; font-weight:600; color:var(--gray-700);">Listo para grabar</span>
+    <span id="mic-timer" style="font-size:1.1rem; font-weight:800; color:var(--blue); font-family:var(--font-mono); display:none;">0:00</span>
+  </div>
+
+  <!-- Botones -->
+  <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap:10px;">
+    <button class="btn btn-blue" id="btn-mic-record" style="font-size:0.9rem; padding:12px 8px;">
+      ⏺ Iniciar grabación
+    </button>
+    <button class="btn btn-outline" id="btn-mic-play" disabled style="font-size:0.9rem; padding:12px 8px;">
+      ▶ Reproducir
+    </button>
+  </div>
+  <p id="mic-status-msg" style="margin-top:10px; font-size:0.78rem; color:var(--gray-400); text-align:center; min-height:18px;"></p>
+</div>
+
+<!-- Control del dispositivo -->
+<div class="card">
+  <div class="card-header">
+    <span class="card-icon red">⚡</span>
+    <div>
+      <p class="card-title">Control del dispositivo</p>
+      <p class="card-subtitle">
+        {% if not is_pi %}Simulado: no es Raspberry Pi{% else %}Afecta el dispositivo físico{% endif %}
+      </p>
+    </div>
+  </div>
+  <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap:10px;">
+    <button class="btn btn-outline btn-sm" id="btn-reboot">
+      🔄 Reiniciar
+    </button>
+    <button class="btn btn-danger btn-sm" id="btn-shutdown">
+      ⏻ Apagar
+    </button>
+  </div>
+  {% if not is_pi %}
+  <p style="margin-top:12px; font-size:0.78rem; color:var(--gray-400); text-align:center;">
+    En laptop de desarrollo, apagado y reinicio se simulan sin efecto real.
+  </p>
+  {% endif %}
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  // ── Referencias ────────────────────────────────────────────────────────
+  const volSlider    = document.getElementById("vol-slider");
+  const volLabel     = document.getElementById("vol-label");
+  const volStatus    = document.getElementById("vol-status");
+  const btnTone      = document.getElementById("btn-tone");
+  const toneStatus   = document.getElementById("tone-status");
+  const btnRecord    = document.getElementById("btn-mic-record");
+  const btnPlay      = document.getElementById("btn-mic-play");
+  const micIcon      = document.getElementById("mic-icon");
+  const micLabel     = document.getElementById("mic-label");
+  const micTimer     = document.getElementById("mic-timer");
+  const micMsg       = document.getElementById("mic-status-msg");
+  const btnReboot    = document.getElementById("btn-reboot");
+  const btnShutdown  = document.getElementById("btn-shutdown");
+  const sysTime      = document.getElementById("sys-time");
+
+  // ── Estado del micrófono ───────────────────────────────────────────────
+  // idle | recording | stopped | playing
+  let micState = "idle";
+  let timerInterval = null;
+  let timerSeconds = 0;
+  let hasRecording = false;
+
+  // ── Volumen: inmediato al soltar ───────────────────────────────────────
+  (async () => {
+    const { ok, data } = await FS.api("/api/device/volume");
+    if (ok && data.ok) {
+      volSlider.value = data.level;
+      volLabel.textContent = data.level + "%";
+    }
+  })();
+
+  volSlider.addEventListener("input", () => {
+    volLabel.textContent = volSlider.value + "%";
+  });
+
+  // Aplica al soltar el slider (no en cada pixel)
+  volSlider.addEventListener("change", async () => {
+    volStatus.textContent = "Aplicando...";
+    volStatus.style.color = "var(--gray-400)";
+    const { ok, data } = await FS.api("/api/device/volume", "POST", {
+      level: parseInt(volSlider.value)
+    });
+    if (ok && data.ok) {
+      volStatus.textContent = data.simulated
+        ? "Simulado (laptop de desarrollo)"
+        : `✓ Volumen ajustado a ${data.level}%`;
+      volStatus.style.color = "var(--teal)";
+    } else {
+      volStatus.textContent = "Error al ajustar volumen.";
+      volStatus.style.color = "var(--red)";
+    }
+    setTimeout(() => { volStatus.textContent = ""; }, 3000);
+  });
+
+  // ── Tono de prueba ─────────────────────────────────────────────────────
+  // Se genera en el SERVIDOR con aplay + sox (tono real por el parlante del Pi)
+  // En laptop se simula con Web Audio API como fallback
+  btnTone.addEventListener("click", async () => {
+    btnTone.disabled = true;
+    btnTone.innerHTML = '<span class="spinner"></span> Reproduciendo...';
+    toneStatus.textContent = "";
+
+    const { ok, data } = await FS.api("/api/device/tone", "POST");
+
+    btnTone.disabled = false;
+    btnTone.textContent = "🔔 Reproducir tono de prueba";
+
+    if (ok && data.ok) {
+      if (data.simulated) {
+        // Fallback: tono en el browser (solo en laptop de desarrollo)
+        playBrowserTone();
+        toneStatus.textContent = "Simulado en el navegador (laptop de desarrollo).";
+        toneStatus.style.color = "var(--gray-400)";
+      } else {
+        toneStatus.textContent = "✓ Tono reproducido por el parlante del dispositivo.";
+        toneStatus.style.color = "var(--teal)";
+      }
+    } else {
+      toneStatus.textContent = data.error || "Error al reproducir tono.";
+      toneStatus.style.color = "var(--red)";
+    }
+    setTimeout(() => { toneStatus.textContent = ""; }, 4000);
+  });
+
+  function playBrowserTone() {
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.frequency.value = 1000;
+      osc.type = "sine";
+      gain.gain.setValueAtTime(0.4, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 1.5);
+      osc.start();
+      osc.stop(ctx.currentTime + 1.5);
+    } catch(e) {}
+  }
+
+  // ── Micrófono: flujo en dos pasos ──────────────────────────────────────
+
+  function setMicState(state) {
+    micState = state;
+    clearInterval(timerInterval);
+    micTimer.style.display = "none";
+
+    if (state === "idle") {
+      micIcon.textContent  = "🎙️";
+      micLabel.textContent = "Listo para grabar";
+      micLabel.style.color = "var(--gray-700)";
+      btnRecord.textContent = "⏺ Iniciar grabación";
+      btnRecord.className  = "btn btn-blue btn-full";
+      btnRecord.disabled   = false;
+      btnPlay.disabled     = !hasRecording;
+
+    } else if (state === "recording") {
+      micIcon.textContent  = "🔴";
+      micLabel.textContent = "Grabando...";
+      micLabel.style.color = "var(--red)";
+      btnRecord.textContent = "⏹ Detener grabación";
+      btnRecord.className  = "btn btn-danger btn-full";
+      btnRecord.disabled   = false;
+      btnPlay.disabled     = true;
+      // Cronómetro
+      timerSeconds = 0;
+      micTimer.style.display = "block";
+      micTimer.textContent = "0:00";
+      timerInterval = setInterval(() => {
+        timerSeconds++;
+        const m = Math.floor(timerSeconds / 60);
+        const s = timerSeconds % 60;
+        micTimer.textContent = `${m}:${s.toString().padStart(2, "0")}`;
+      }, 1000);
+
+    } else if (state === "stopped") {
+      micIcon.textContent  = "✅";
+      micLabel.textContent = "Grabación lista";
+      micLabel.style.color = "var(--teal)";
+      btnRecord.textContent = "⏺ Grabar de nuevo";
+      btnRecord.className  = "btn btn-outline btn-full";
+      btnRecord.disabled   = false;
+      btnPlay.disabled     = false;
+
+    } else if (state === "playing") {
+      micIcon.textContent  = "🔊";
+      micLabel.textContent = "Reproduciendo por el parlante...";
+      micLabel.style.color = "var(--blue)";
+      btnRecord.disabled   = true;
+      btnPlay.disabled     = true;
+    }
+  }
+
+  btnRecord.addEventListener("click", async () => {
+    if (micState === "idle" || micState === "stopped") {
+      // Iniciar grabación
+      setMicState("recording");
+      micMsg.textContent = "";
+      const { ok, data } = await FS.api("/api/device/mic/start", "POST");
+      if (!ok || !data.ok) {
+        setMicState("idle");
+        micMsg.textContent = data?.error || "Error al iniciar grabación.";
+        micMsg.style.color = "var(--red)";
+      }
+
+    } else if (micState === "recording") {
+      // Detener grabación
+      btnRecord.disabled = true;
+      const { ok, data } = await FS.api("/api/device/mic/stop", "POST");
+      if (ok && data.ok) {
+        hasRecording = true;
+        setMicState("stopped");
+        micMsg.textContent = `✓ ${timerSeconds}s grabados. Presiona Reproducir para escuchar.`;
+        micMsg.style.color = "var(--teal)";
+      } else {
+        setMicState("idle");
+        micMsg.textContent = data?.error || "Error al detener grabación.";
+        micMsg.style.color = "var(--red)";
+      }
+    }
+  });
+
+  btnPlay.addEventListener("click", async () => {
+    setMicState("playing");
+    micMsg.textContent = "";
+    const { ok, data } = await FS.api("/api/device/mic/play", "POST");
+    if (ok && data.ok) {
+      micMsg.textContent = data.simulated
+        ? "Simulado (laptop de desarrollo)."
+        : "✓ Reproducción completada.";
+      micMsg.style.color = data.simulated ? "var(--gray-400)" : "var(--teal)";
+    } else {
+      micMsg.textContent = data?.error || "Error al reproducir.";
+      micMsg.style.color = "var(--red)";
+    }
+    setMicState("stopped");
+  });
+
+  // ── Reiniciar / Apagar ─────────────────────────────────────────────────
+  btnReboot.addEventListener("click", () => {
+    FS.confirm({
+      title: "¿Reiniciar el dispositivo?",
+      body: "El servidor se apagará. Tardará unos segundos en volver a estar disponible.",
+      confirmLabel: "Reiniciar",
+      confirmClass: "btn-blue",
+      onConfirm: async () => {
+        const { data } = await FS.api("/api/device/reboot", "POST");
+        FS.showToast(data.simulated ? "Reinicio simulado (no es Pi)." : "Reiniciando...", "info", 8000);
+      },
+    });
+  });
+
+  btnShutdown.addEventListener("click", () => {
+    FS.confirm({
+      title: "¿Apagar el dispositivo?",
+      body: "El dispositivo se apagará completamente. Para volver a usarlo, desconecte y reconecte la alimentación.",
+      confirmLabel: "Apagar",
+      confirmClass: "btn-danger",
+      onConfirm: async () => {
+        const { data } = await FS.api("/api/device/shutdown", "POST");
+        FS.showToast(data.simulated ? "Apagado simulado (no es Pi)." : "Apagando...", "info", 8000);
+      },
+    });
+  });
+
+  // ── Reloj ──────────────────────────────────────────────────────────────
+  function tick() {
+    sysTime.textContent = new Date().toLocaleTimeString("es-EC", { hour12: false });
+  }
+  tick();
+  setInterval(tick, 1000);
+
+})();
+</script>
+{% endblock %}

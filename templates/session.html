@@ -1,0 +1,292 @@
+{% extends "base.html" %}
+{% block title %}Sesión en curso — FonoScreen{% endblock %}
+
+{% block header_action %}
+<span class="badge badge-teal" style="font-family:var(--font-mono); font-size:0.75rem;">
+  #{{ state.session_id }}
+</span>
+{% endblock %}
+
+{% block content %}
+
+<!-- Datos del niño -->
+<div class="card" style="padding: 14px 20px;">
+  <div style="display:flex; align-items:center; justify-content:space-between; gap:12px;">
+    <div style="min-width:0;">
+      <p style="font-weight:700; font-size:1rem; color:var(--blue); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+        {{ state.child.name }}
+      </p>
+      <p style="font-size:0.78rem; color:var(--gray-400); margin-top:2px;">
+        {{ state.child.dob }}
+      </p>
+    </div>
+    <span class="badge badge-teal" id="session-badge" style="flex-shrink:0;">En curso</span>
+  </div>
+</div>
+
+<!-- Indicador de estado principal -->
+<div class="card" style="text-align:center; padding:28px 20px;">
+  <div id="status-icon" style="font-size:2.8rem; margin-bottom:10px; transition: all 0.3s;">🔊</div>
+  <p id="status-label" style="font-size:1.1rem; font-weight:700; color:var(--blue); margin-bottom:4px;">
+    Preparando...
+  </p>
+  <p id="status-sub" style="font-size:0.85rem; color:var(--gray-400); line-height:1.45;">
+    Iniciando sistema
+  </p>
+
+  <!-- Palabra objetivo -->
+  <div id="word-display" style="margin-top:20px; padding:14px 20px; background:var(--blue-light);
+       border-radius:var(--radius-sm); display:inline-block; min-width:140px;">
+    <p style="font-size:0.72rem; font-weight:600; color:var(--blue-mid); text-transform:uppercase;
+       letter-spacing:0.06em; margin-bottom:4px;">Palabra objetivo</p>
+    <p id="current-word" style="font-size:2rem; font-weight:800; color:var(--blue);
+       letter-spacing:-0.02em;">—</p>
+  </div>
+
+  <!-- Mensaje de no voz detectada -->
+  <div id="no-voice-banner" style="display:none; margin-top:16px; padding:12px 16px;
+       background:var(--amber-light); border-radius:var(--radius-sm); border-left:3px solid var(--amber);">
+    <p style="font-size:0.9rem; font-weight:600; color:#92600A;">
+      🔇 No se escuchó respuesta
+    </p>
+    <p style="font-size:0.82rem; color:#92600A; margin-top:3px;">
+      El sistema va a repetir el estímulo
+    </p>
+  </div>
+</div>
+
+<!-- Barra de progreso -->
+<div class="card" style="padding:16px 20px;">
+  <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;">
+    <span style="font-size:0.82rem; font-weight:600; color:var(--gray-700);">Progreso</span>
+    <span id="progress-text" style="font-size:0.82rem; font-weight:700; color:var(--blue);
+         font-family:var(--font-mono);">0 / 20</span>
+  </div>
+  <div class="progress-track">
+    <div class="progress-fill" id="progress-fill" style="width:0%"></div>
+  </div>
+
+  <!-- Progreso de análisis (visible solo en fase analyzing/generating_report) -->
+  <div id="analysis-progress-wrap" style="display:none; margin-top:12px;">
+    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px;">
+      <span style="font-size:0.78rem; color:var(--gray-400);" id="analysis-label">Analizando grabaciones</span>
+      <span style="font-size:0.78rem; font-weight:700; color:var(--teal); font-family:var(--font-mono);"
+            id="analysis-text">0 / 20</span>
+    </div>
+    <div class="progress-track" style="height:4px;">
+      <div class="progress-fill" id="analysis-fill" style="width:0%; background:linear-gradient(90deg,var(--teal),var(--teal));"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Controles -->
+<div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+  <button class="btn btn-outline" id="btn-pause">
+    ⏸ Pausar
+  </button>
+  <button class="btn btn-outline" id="btn-reset"
+          style="color:var(--red); border-color:rgba(192,57,43,0.3);">
+    ✕ Cancelar prueba
+  </button>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+
+  // ── Configuración de estados ───────────────────────────────────────────
+  const STATUS_CONFIG = {
+    idle: {
+      icon: "⏳",
+      label: "Preparando evaluación",
+      sub: "Cargando recursos del sistema",
+      badge: ["badge-teal", "En curso"],
+      showWord: false,
+      showAnalysis: false,
+    },
+    playing: {
+      icon: "🔊",
+      label: "Escucha con atención",
+      sub: "El niño debe escuchar la palabra",
+      badge: ["badge-teal", "En curso"],
+      showWord: true,
+      showAnalysis: false,
+    },
+    recording: {
+      icon: "🔴",
+      label: "Ahora repite la palabra",
+      sub: "El sistema está grabando la respuesta",
+      badge: ["badge-teal", "Grabando"],
+      pulse: true,
+      showWord: true,
+      showAnalysis: false,
+    },
+    no_voice: {
+      icon: "🔇",
+      label: "No se escuchó respuesta",
+      sub: "El sistema repetirá el estímulo automáticamente",
+      badge: ["badge-amber", "Reintentando"],
+      showWord: true,
+      showNoVoice: true,
+      showAnalysis: false,
+    },
+    analyzing: {
+      icon: "⚙️",
+      label: "Analizando grabaciones",
+      sub: "Por favor espere, esto puede tomar un momento",
+      badge: ["badge-blue", "Analizando"],
+      showWord: false,
+      showAnalysis: true,
+      analysisLabel: "Analizando grabaciones",
+    },
+    generating_report: {
+      icon: "📄",
+      label: "Preparando informe",
+      sub: "Casi listo, generando el reporte de evaluación",
+      badge: ["badge-blue", "Preparando informe"],
+      showWord: false,
+      showAnalysis: true,
+      analysisLabel: "Preparando informe",
+    },
+    paused: {
+      icon: "⏸",
+      label: "Evaluación pausada",
+      sub: "Presione continuar cuando esté listo",
+      badge: ["badge-amber", "Pausado"],
+      showWord: true,
+      showAnalysis: false,
+    },
+    done: {
+      icon: "✅",
+      label: "¡Evaluación completada!",
+      sub: "Redirigiendo a resultados...",
+      badge: ["badge-teal", "Completo"],
+      showWord: false,
+      showAnalysis: false,
+    },
+  };
+
+  // ── Referencias DOM ────────────────────────────────────────────────────
+  const iconEl        = document.getElementById("status-icon");
+  const labelEl       = document.getElementById("status-label");
+  const subEl         = document.getElementById("status-sub");
+  const wordEl        = document.getElementById("current-word");
+  const wordDisplay   = document.getElementById("word-display");
+  const progressFill  = document.getElementById("progress-fill");
+  const progressText  = document.getElementById("progress-text");
+  const sessionBadge  = document.getElementById("session-badge");
+  const noVoiceBanner = document.getElementById("no-voice-banner");
+  const analysisWrap  = document.getElementById("analysis-progress-wrap");
+  const analysisLabel = document.getElementById("analysis-label");
+  const analysisFill  = document.getElementById("analysis-fill");
+  const analysisText  = document.getElementById("analysis-text");
+  const btnPause      = document.getElementById("btn-pause");
+  const btnReset      = document.getElementById("btn-reset");
+
+  let lastStatus = null;
+  let paused = false;
+
+  // ── Aplicar estado a la UI ─────────────────────────────────────────────
+  function applyState(state) {
+    const cfg = STATUS_CONFIG[state.status] || STATUS_CONFIG.idle;
+
+    // Icono y texto
+    iconEl.textContent  = cfg.icon;
+    labelEl.textContent = cfg.label;
+    subEl.textContent   = cfg.sub;
+
+    // Pulso durante grabación
+    iconEl.classList.toggle("pulse", !!cfg.pulse);
+
+    // Badge
+    sessionBadge.className = "badge " + cfg.badge[0];
+    sessionBadge.textContent = cfg.badge[1];
+
+    // Palabra actual
+    wordDisplay.style.display = cfg.showWord ? "inline-block" : "none";
+    if (state.current_word) wordEl.textContent = state.current_word;
+
+    // Banner no voz
+    noVoiceBanner.style.display = cfg.showNoVoice ? "block" : "none";
+
+    // Barra de progreso principal
+    const total   = state.total_items || 20;
+    const current = state.current_item || 0;
+    progressFill.style.width = Math.round((current / total) * 100) + "%";
+    progressText.textContent = `${current} / ${total}`;
+
+    // Progreso de análisis
+    analysisWrap.style.display = cfg.showAnalysis ? "block" : "none";
+    if (cfg.showAnalysis) {
+      const ap = state.analysis_progress || 0;
+      analysisFill.style.width = Math.round((ap / total) * 100) + "%";
+      analysisText.textContent = `${ap} / ${total}`;
+      if (cfg.analysisLabel) analysisLabel.textContent = cfg.analysisLabel;
+    }
+
+    // Botón pausa/continuar
+    if (state.status === "paused") {
+      btnPause.disabled = false;
+      btnPause.textContent = "▶ Continuar";
+      paused = true;
+    } else if (["analyzing", "generating_report", "done"].includes(state.status)) {
+      btnPause.disabled = true;
+      btnPause.textContent = "⏸ Pausar";
+    } else {
+      btnPause.disabled = false;
+      btnPause.textContent = "⏸ Pausar";
+      paused = false;
+    }
+
+    // Redirigir al completarse
+    if (state.status === "done" && lastStatus !== "done") {
+      setTimeout(() => { window.location.href = "/resultado"; }, 1800);
+    }
+
+    lastStatus = state.status;
+  }
+
+  // ── Polling ────────────────────────────────────────────────────────────
+  async function poll() {
+    const { ok, data } = await FS.api("/api/session/status");
+    if (ok) applyState(data);
+  }
+
+  poll();
+  const interval = setInterval(poll, 1500);
+
+  // ── Pausa / continuar ──────────────────────────────────────────────────
+  btnPause.addEventListener("click", async () => {
+    console.log("btnPause click — texto:", btnPause.textContent, "disabled:", btnPause.disabled);
+    if (btnPause.textContent.includes("Continuar")) {
+      console.log("→ llamando /api/session/resume");
+      const { ok, data } = await FS.api("/api/session/resume", "POST");
+      console.log("← resume response:", ok, data);
+      if (!ok) FS.showToast(data.error || "No se pudo reanudar.", "error");
+    } else {
+      console.log("→ llamando /api/session/pause");
+      await FS.api("/api/session/pause", "POST");
+    }
+  });
+
+  // ── Cancelar ──────────────────────────────────────────────────────────
+  btnReset.addEventListener("click", () => {
+    FS.confirm({
+      title: "¿Cancelar la evaluación?",
+      body: "Se perderán todos los datos de esta sesión y volverá al registro del niño.",
+      confirmLabel: "Sí, cancelar",
+      confirmClass: "btn-danger",
+      onConfirm: async () => {
+        clearInterval(interval);
+        await FS.api("/api/session/reset", "POST");
+        window.location.href = "/registro";
+      },
+    });
+  });
+
+  window.addEventListener("pagehide", () => clearInterval(interval));
+})();
+</script>
+{% endblock %}
