@@ -404,17 +404,11 @@ def api_devmode():
     if not IS_PI:
         return jsonify({"ok": True, "simulated": True})
     try:
-        subprocess.Popen(["sudo", "/usr/local/bin/modo-dev"])
+        subprocess.run(["sudo", "/usr/local/bin/modo-dev"], timeout=30, check=False )
         log.info("Modo desarrollo activado desde la interfaz.")
         return jsonify({"ok": True})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)})
-    if not IS_PI:
-        log.info("Reinicio simulado (no es Pi).")
-        return jsonify({"ok": True, "simulated": True})
-    log.info("Reiniciando dispositivo.")
-    subprocess.Popen(["sudo", "reboot"])
-    return jsonify({"ok": True})
 
 
 @app.route("/api/device/status")
