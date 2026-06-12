@@ -36,7 +36,9 @@ fi
 # ── 1. Instalar dependencias ──────────────────────────────────────────────────
 echo "==> Instalando dependencias..."
 apt-get update -qq
-apt-get install -y python3-venv python3-pip sox alsa-utils hostapd dnsmasq
+apt-get install -y python3-venv python3-pip sox alsa-utils hostapd dnsmasq \
+    libpango-1.0-0 libharfbuzz0b libpangoft2-1.0-0 \
+    libharfbuzz-subset0 libffi-dev libjpeg-dev libopenjp2-7-dev
 
 # ── 2. Crear venv ─────────────────────────────────────────────────────────────
 echo "==> Creando venv..."
@@ -44,7 +46,7 @@ cd "$PROJECT"
 rm -rf venv
 python3 -m venv venv
 venv/bin/pip install --quiet -r requirements.txt
-mkdir -p logs exports
+mkdir -p logs exports recordings
 touch logs/server.log
 chown -R pi:pi "$PROJECT"
 

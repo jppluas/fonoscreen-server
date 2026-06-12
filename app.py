@@ -613,6 +613,9 @@ def api_historial_report_html(session_id):
         return jsonify({"ok": False, "error": "Sesión no encontrada."}), 404
     html = generate_report_html(data)
     return html, 200, {"Content-Type": "text/html; charset=utf-8"}
+
+
+@app.route("/api/device/space")
 def api_device_space():
     """Devuelve espacio libre y sesiones restantes estimadas."""
     remaining = db.get_sessions_remaining()

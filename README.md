@@ -10,7 +10,9 @@ ESPOL · Ingeniería en Ciencias de la Computación · Materia Integradora
 ```
 fonoscreen-server/
 ├── app.py                  # Servidor Flask — toda la infraestructura
-├── requirements.txt        # Flask==3.1.3
+├── db.py                   # Capa de persistencia SQLite
+├── report_html.py          # Fuente única del HTML del informe (PDF y pantalla)
+├── requirements.txt        # Flask==3.1.3, weasyprint
 ├── first_boot.sh           # Script de primer arranque del Pi
 ├── first-boot.service      # Servicio systemd que lanza first_boot.sh
 ├── backup_config.sh        # Script para hacer backup de la configuración
@@ -23,15 +25,20 @@ fonoscreen-server/
 │   └── fonoscreen-hotspot.service
 ├── templates/
 │   ├── base.html           # Layout compartido (header, footer)
-│   ├── register.html       # Registro del niño antes de la prueba
+│   ├── register.html       # Registro del niño + anamnesis
 │   ├── session.html        # Pantalla en curso — polling al estado global
 │   ├── results.html        # Resultados y descarga de informes
-│   └── device.html         # Panel de dispositivo (volumen, mic, apagado)
+│   ├── device.html         # Panel de dispositivo (volumen, mic, apagado)
+│   └── historial.html      # Historial de sesiones + gestión de audios
 ├── static/
 │   ├── css/base.css        # Estilos mobile-first
 │   └── js/utils.js         # Utilidades JS: toast, confirm, api()
+├── recordings/             # Audios grabados por sesión (git-ignored)
+│   └── <session_id>/
+│       └── <session_id>_<palabra>.wav
 ├── backups/                # Backups del sistema (git-ignored)
-├── exports/                # PDFs generados (git-ignored)
+├── exports/                # Reservado para exportaciones futuras (git-ignored)
+├── fonoscreen.db           # Base de datos SQLite (git-ignored)
 └── logs/
     └── server.log
 ```
@@ -39,6 +46,17 @@ fonoscreen-server/
 ---
 
 ## Desarrollo en laptop (Debian 12)
+
+### Dependencias de sistema (solo una vez)
+
+weasyprint requiere librerías del sistema además del paquete Python:
+
+```bash
+sudo apt install -y libpango-1.0-0 libharfbuzz0b libpangoft2-1.0-0 \
+    libharfbuzz-subset0 libffi-dev libjpeg-dev libopenjp2-7-dev
+```
+
+### Arrancar el servidor
 
 ```bash
 cd ~/fonoscreen-server
@@ -55,6 +73,8 @@ En laptop, `IS_PI = False`. Esto significa:
 - El volumen, tono, grabación de micrófono y apagado se **simulan** (responden ok sin ejecutar nada real).
 - El endpoint `/dev/simulate` está activo para simular el pipeline manualmente.
 - El servidor corre en modo debug con recarga automática.
+- El botón "🧪 Llenar con datos de prueba" en el registro es visible.
+- El botón "➕ Insertar sesión de prueba" en el historial es visible.
 
 > **Importante:** el venv tiene rutas absolutas. Si mueves o renombras la
 > carpeta, bórralo y créalo de nuevo:
@@ -139,8 +159,8 @@ sudo umount /media/$USER/rootfs
 ```
 
 Insertar la SD en el Pi y encender. El `first_boot.sh` corre automáticamente:
-1. Instala dependencias del sistema (`sox`, `alsa-utils`, `hostapd`, `dnsmasq`)
-2. Crea el venv ARM e instala Flask
+1. Instala dependencias del sistema (`sox`, `alsa-utils`, `hostapd`, `dnsmasq`, librerías de weasyprint)
+2. Crea el venv ARM e instala Flask y weasyprint
 3. Copia los archivos de `config/` a sus rutas del sistema
 4. Configura sudoers y aliases
 5. Habilita los servicios systemd
@@ -168,8 +188,10 @@ cat ~/first_boot.log
 Si el arranque automático no funciona, este es el proceso paso a paso:
 
 ```bash
-# 1. Instalar dependencias de audio y red
-sudo apt install -y sox alsa-utils hostapd dnsmasq
+# 1. Instalar dependencias de audio, red y weasyprint
+sudo apt install -y sox alsa-utils hostapd dnsmasq \
+    libpango-1.0-0 libharfbuzz0b libpangoft2-1.0-0 \
+    libharfbuzz-subset0 libffi-dev libjpeg-dev libopenjp2-7-dev
 
 # 2. Clonar el proyecto
 git clone <repo> ~/fonoscreen-server
@@ -308,6 +330,153 @@ el mismo código funciona en laptop y en Pi sin cambios.
 
 ---
 
+## Base de datos SQLite
+
+La BD `fonoscreen.db` se crea automáticamente en la raíz del proyecto al
+arrancar Flask por primera vez. No hay que crearla manualmente.
+
+### Tablas
+
+| tabla | descripción |
+|---|---|
+| `sessions` | Una fila por sesión: datos del niño, anamnesis, PFFB, nivel, estado |
+| `items` | Una fila por palabra evaluada (20 por sesión): transcripción, resultado, tipo de error, alineación NW |
+| `phoneme_summary` | Una fila por fonema por sesión: PFF%, nivel, error predominante |
+| `reports` | Una fila por sesión: nota clínica y nota para representantes generadas por Gemma |
+
+### Funciones principales (para el pipeline de Daniel)
+
+```python
+import db
+
+# Al terminar cada ítem
+db.save_item(session_id, {
+    "item_index":    i,             # 0-19
+    "phoneme":       "/r/",
+    "word_expected": "carro",
+    "word_produced": "cayo",        # transcripción del niño
+    "audio_path":    f"{session_id}/{session_id}_carro.wav",
+    "result":        "error",       # correct | error | not_evaluable
+    "error_type":    "Sustitución", # Sustitución | Omisión | Inserción | Variante dialectal
+    "pff":           50.0,
+    "alignment":     [...],         # lista de dicts posición a posición (NW)
+})
+
+# Al terminar el análisis fonémico
+db.save_phoneme_summary(session_id, {
+    "phoneme":           "/r/",
+    "pff":               62.5,
+    "level":             "Bajo",        # Normal | Bajo
+    "error_predominant": "Sustitución",
+})
+
+# Al terminar la generación del reporte (Gemma)
+db.save_report(session_id, {
+    "nota_clinica":        "...",  # texto para el especialista
+    "nota_representantes": "...",  # texto en lenguaje simple
+})
+
+# Al terminar toda la sesión
+db.close_session(session_id, pffb=68.2, level="Seguimiento activo")
+```
+
+### Nomenclatura de audios
+
+Los archivos WAV se guardan en `recordings/<session_id>/` con el nombre:
+
+```
+<session_id>_<palabra_normalizada>.wav
+```
+
+La normalización quita tildes y pasa a minúsculas:
+`mamá` → `mama`, `café` → `cafe`, `nariz` → `nariz`.
+
+Ejemplos:
+```
+recordings/A1B2C3D4/A1B2C3D4_mama.wav
+recordings/A1B2C3D4/A1B2C3D4_carro.wav
+recordings/A1B2C3D4/A1B2C3D4_cafe.wav
+```
+
+El pipeline guarda la ruta relativa en `items.audio_path`:
+```python
+audio_path = f"{session_id}/{db.audio_filename(session_id, word_expected)}"
+```
+
+### Exportación de sesión
+
+Para exportar todos los datos de una sesión como dict:
+
+```python
+data = db.export_session(session_id)
+# data = {
+#   "session": {...},
+#   "items": [...],
+#   "phoneme_summary": [...],
+#   "report": {...},
+# }
+```
+
+Desde la interfaz, el historial permite:
+- **Exportar ZIP**: JSON + PDF generado con weasyprint + audios WAV (si existen)
+- **Exportar JSON**: solo los datos estructurados
+- **Exportar PDF**: abre el informe en ventana nueva y llama `window.print()`
+
+### Espacio en disco
+
+El sistema verifica espacio antes de iniciar cada sesión. Parámetros:
+
+- Peor caso por sesión: **28 MB** (44.1kHz estéreo, 8s × 20 ítems)
+- Mínimo requerido: **10 sesiones disponibles** (280 MB libres)
+
+Si hay menos espacio, el inicio de sesión devuelve error 507 y la pantalla
+de registro muestra un banner rojo. El panel de dispositivo muestra el número
+de sesiones restantes estimadas en tiempo real.
+
+### Gestión de audios desde el historial
+
+Cada sesión en el historial muestra si tiene audios disponibles. Las acciones
+posibles (todas con confirmación de irreversibilidad):
+
+| acción | qué hace |
+|---|---|
+| Borrar audios | Elimina `recordings/<session_id>/`. Resultado en BD intacto. |
+| Borrar sesión completa | Elimina audios + todos los registros de BD. |
+| Exportar ZIP | Genera PDF en memoria + empaqueta JSON + audios + PDF en un ZIP. |
+
+---
+
+## Informe de evaluación
+
+El HTML del informe vive en `report_html.py` — es la fuente única de verdad
+para el PDF y para la vista en pantalla. Si se cambia el diseño del informe,
+cambia en ambos lados automáticamente.
+
+```python
+from report_html import generate_report_html
+data = db.export_session(session_id)
+html = generate_report_html(data)
+# Para PDF:
+from weasyprint import HTML
+pdf_bytes = HTML(string=html).write_pdf()
+```
+
+El informe contiene:
+1. Identificación del niño (nombre, fecha de nacimiento, edad, género, fecha de evaluación)
+2. Anamnesis (historial de otitis, diagnóstico auditivo, idioma en el hogar, antecedentes familiares, terapia previa)
+3. Resultado global (PFFB%, nivel, interpretación)
+4. Desempeño por fonema (PFF%, nivel, error predominante)
+5. Detalle por palabra (palabra esperada, producción del niño, resultado, tipo de error)
+6. Nota clínica (generada por Gemma 2B)
+7. Nota para representantes (generada por Gemma 2B)
+
+Tiempo de generación del PDF estimado por hardware:
+- Pi 3 B+: 3-8 segundos
+- Pi 4: 1-3 segundos
+- Pi 5: menos de 1 segundo
+
+---
+
 ## Integración del pipeline (para Daniel)
 
 El pipeline modifica `_session_state` en `app.py` directamente desde su hilo.
@@ -327,15 +496,22 @@ _session_state = {
         "dob":    str,      # "YYYY-MM-DD"
         "gender": str,      # "F" | "M" | "O"
         "notes":  str,
+        # anamnesis estructurada
+        "anamnesis_otitis":         int,  # 0 | 1
+        "anamnesis_hearing_dx":     str | None,
+        "anamnesis_home_language":  str,
+        "anamnesis_family_history": int,  # 0 | 1
+        "anamnesis_family_who":     str | None,
+        "anamnesis_prior_therapy":  int,  # 0 | 1
     },
     "started_at":   str,    # ISO datetime
 
     # --- Daniel actualiza estos campos durante el pipeline ---
     "status":           str,    # ver tabla de estados abajo
-    "current_item":     int,    # ítem actual, empieza en 0, sube hasta total_items
-    "total_items":      int,    # total de palabras a evaluar (defínelo al inicio)
-    "current_word":     str,    # palabra objetivo que ve el docente, ej. "pelota"
-    "analysis_progress":int,    # cuántos ítems ya analizados (durante "analyzing")
+    "current_item":     int,    # ítem actual, empieza en 0
+    "total_items":      int,    # total de palabras a evaluar
+    "current_word":     str,    # palabra objetivo, ej. "pelota"
+    "analysis_progress":int,    # ítems ya analizados (durante "analyzing")
     "no_voice_detected":bool,   # True cuando Silero VAD no detectó voz
     "results":          dict,   # resultado final (ver estructura abajo)
 }
@@ -359,21 +535,20 @@ _session_state = {
 ```python
 _session_state["results"] = {
     "score": int,           # puntuación global 0-100
-    "level": str,           # texto descriptivo del nivel, ej. "Desarrollo típico"
+    "level": str,           # texto descriptivo del nivel
     "details": [
         {
             "phoneme": str,     # fonema evaluado, ej. "/r/"
             "score":   int,     # puntuación 0-100
             "flag":    bool,    # True = requiere atención
         },
-        # ... un objeto por fonema evaluado
     ],
 }
 ```
 
 ### Conectar el pipeline
 
-En `app.py`, buscar el bloque `# TODO` (~línea 125):
+En `app.py`, buscar el bloque `# TODO` (~línea 154):
 
 ```python
 import threading
@@ -385,8 +560,7 @@ threading.Thread(target=run_pipeline, args=(session_id,), daemon=True).start()
 
 ```python
 # pipeline.py
-import app
-import time
+import app, db, time
 
 def esperar_si_pausado():
     """Bloquea el hilo del pipeline mientras el docente tiene pausada la prueba."""
@@ -396,54 +570,54 @@ def esperar_si_pausado():
 def run_pipeline(session_id):
     state = app._session_state
 
-    WORDS = ["pelota", "casa", "árbol", ...]  # tu lista real
+    WORDS = ["mamá", "cama", "papá", ...]  # batería real
     state["total_items"] = len(WORDS)
 
     for i, word in enumerate(WORDS):
-
-        # Verificar cancelación al inicio de cada ítem
         if not state["active"]:
             return
-
         esperar_si_pausado()
 
         # 1. Reproducir estímulo
         state.update({"status": "playing", "current_word": word, "current_item": i})
         reproducir_audio(word)
-
         esperar_si_pausado()
 
         # 2. Grabar respuesta
         state["status"] = "recording"
-        audio = grabar()
+        audio_path = db.get_recordings_dir(session_id) / db.audio_filename(session_id, word)
+        audio = grabar(audio_path)
 
-        # 3. Verificar que el niño habló (Silero VAD)
+        # 3. Verificar voz (Silero VAD)
         if not voz_detectada(audio):
             state.update({"status": "no_voice", "no_voice_detected": True})
-            continue  # reintentar este ítem
+            continue
 
         state["no_voice_detected"] = False
-        guardar_audio(session_id, i, audio)
 
     # Fase de análisis (XLS-R + Phonemizer + NW)
     state.update({"status": "analyzing", "analysis_progress": 0})
-    resultados = []
     for i, word in enumerate(WORDS):
         if not state["active"]:
             return
-        resultados.append(analizar(session_id, i, word))
+        resultado = analizar(session_id, i, word)
+        db.save_item(session_id, resultado)
         state["analysis_progress"] = i + 1
+
+    # Guardar resumen por fonema
+    for fonema_data in calcular_resumen_fonemas():
+        db.save_phoneme_summary(session_id, fonema_data)
 
     # Generar reporte (Gemma via Ollama)
     state["status"] = "generating_report"
-    reporte = generar_reporte(resultados)
+    reporte = generar_reporte_gemma(session_id)
+    db.save_report(session_id, reporte)
 
     # Terminar — la UI redirige automáticamente a /resultado
-    state["results"] = {
-        "score": reporte["score"],
-        "level": reporte["level"],
-        "details": reporte["details"],
-    }
+    pffb = calcular_pffb()
+    level = calcular_nivel(pffb)
+    db.close_session(session_id, pffb, level)
+    state["results"] = {"score": pffb, "level": level, "details": [...]}
     state["status"] = "done"
 ```
 
@@ -457,9 +631,6 @@ Cuando el docente presiona "Continuar":
 - La infraestructura llama a `/api/session/resume`
 - Ese endpoint pone `state["status"] = "playing"` (o `"idle"` si no había palabra activa)
 - El pipeline que estaba bloqueado en `esperar_si_pausado()` detecta el cambio y continúa
-
-El pipeline no necesita hacer nada especial para reanudar: solo llamar
-`esperar_si_pausado()` en los puntos donde no debe ejecutarse mientras está pausado.
 
 ---
 
@@ -486,11 +657,9 @@ La pantalla de sesión reacciona en máximo 1.5 segundos sin recargar.
 
 Para probar pausa y reanudación:
 ```bash
-# Mientras la sesión está en curso, pausar:
 curl -s -X POST http://localhost:5000/api/session/pause \
   -H "Content-Type: application/json"
 
-# Reanudar desde la UI o directamente:
 curl -s -X POST http://localhost:5000/api/session/resume \
   -H "Content-Type: application/json"
 ```
@@ -499,22 +668,59 @@ curl -s -X POST http://localhost:5000/api/session/resume \
 
 ---
 
+## Probar la base de datos (sesión de prueba)
+
+Con el servidor corriendo en modo debug, el historial muestra un botón
+"➕ Insertar sesión de prueba". Al presionarlo se crea una sesión completa
+de **John Doe** con la batería fonológica real de FonoScreen, resultados
+coherentes con la evaluación manual de los audios, y notas clínicas de ejemplo.
+
+Para probar también la reproducción de audios, crear los WAVs de prueba
+manualmente después de insertar la sesión. El historial muestra el session ID:
+
+```bash
+# Reemplazar SESSION_ID con el ID que aparece en el historial
+mkdir -p recordings/SESSION_ID
+cd recordings/SESSION_ID
+
+for word in mama cama papa sopa boca abeja taza gato dedo helado \
+            casa vaca agua foco cafe nariz mano luna pelota; do
+    sox -n "SESSION_ID_${word}.wav" synth 1.5 sine 440
+done
+```
+
+Después de crear los archivos, recargar el historial. El botón ▶ aparece
+en cada fila de la tabla de palabras. Si los audios no existen, la columna
+muestra `—` y el botón de "Borrar audios" no aparece.
+
+Para probar el flujo completo de gestión:
+1. Insertar sesión de prueba → anotar el ID
+2. Crear los WAVs de prueba con el comando de arriba
+3. Abrir la sesión en el historial → verificar que ▶ funciona
+4. Exportar ZIP → verificar que incluye JSON, PDF y audios
+5. Presionar "Borrar audios" → confirmar → verificar que ▶ desaparece
+6. Exportar ZIP nuevamente → verificar que sale sin audios
+7. Presionar "Borrar sesión completa" → confirmar → verificar que desaparece del historial
+
+---
+
 ## Endpoints HTTP
 
 | método | ruta | descripción |
 |---|---|---|
 | GET | `/` | Redirige según estado: registro, sesión o resultado |
-| GET | `/registro` | Formulario de registro del niño |
+| GET | `/registro` | Formulario de registro del niño + anamnesis |
 | GET | `/sesion` | Pantalla de sesión en curso |
 | GET | `/resultado` | Pantalla de resultados |
 | GET | `/dispositivo` | Panel de administración del dispositivo |
-| POST | `/api/session/start` | Inicia sesión. Body: `{name, dob, gender, notes}` |
+| GET | `/historial` | Historial de sesiones y gestión de audios |
+| POST | `/api/session/start` | Inicia sesión. Body: `{name, dob, gender, notes, anamnesis_*}` |
 | GET | `/api/session/status` | Devuelve `_session_state` completo como JSON |
 | POST | `/api/session/pause` | Pone `status = "paused"` |
-| POST | `/api/session/resume` | Reanuda desde pausa. Pone `status = "playing"` o `"idle"` |
+| POST | `/api/session/resume` | Reanuda desde pausa |
 | POST | `/api/session/reset` | Cancela la sesión y limpia el estado |
-| GET | `/api/report/tecnico` | Descarga el PDF del informe técnico |
-| GET | `/api/report/representantes` | Descarga el PDF del informe para representantes |
+| GET | `/api/report/tecnico` | PDF del informe técnico (placeholder hasta pipeline) |
+| GET | `/api/report/representantes` | PDF para representantes (placeholder hasta pipeline) |
 | GET | `/api/device/volume` | Devuelve el nivel de volumen actual |
 | POST | `/api/device/volume` | Ajusta volumen. Body: `{level: 0-100}` |
 | POST | `/api/device/tone` | Reproduce tono de prueba por el parlante |
@@ -525,6 +731,15 @@ curl -s -X POST http://localhost:5000/api/session/resume \
 | POST | `/api/device/shutdown` | Apaga el dispositivo (`sudo shutdown now`) |
 | POST | `/api/device/reboot` | Reinicia el dispositivo (`sudo reboot`) |
 | GET | `/api/device/status` | Uptime, disco, hora del servidor |
+| GET | `/api/device/space` | Espacio libre y sesiones restantes estimadas |
+| GET | `/api/historial/sessions` | Lista las últimas 50 sesiones |
+| GET | `/api/historial/session/<id>` | Exportación completa de una sesión (JSON) |
+| DELETE | `/api/historial/session/<id>` | Elimina sesión completa (BD + audios) |
+| POST | `/api/historial/session/<id>/delete-audio` | Elimina solo los audios |
+| GET | `/api/historial/session/<id>/audio/<word>` | Sirve el WAV de una palabra |
+| GET | `/api/historial/session/<id>/export-zip` | ZIP con JSON + PDF + audios |
+| GET | `/api/historial/session/<id>/report-html` | HTML del informe (fuente del PDF) |
+| POST | `/api/historial/seed` | Inserta sesión de prueba (solo debug) |
 | POST | `/dev/simulate` | Simula estados del pipeline (solo debug, deshabilitado en Pi) |
 
 ---
@@ -664,6 +879,26 @@ pip install -r requirements.txt
 
 ---
 
+### weasyprint falla al generar el PDF
+
+**Síntoma:** el ZIP se descarga pero contiene `informe_ERROR.txt` en vez del PDF.
+
+**Causa:** faltan las librerías de sistema de weasyprint.
+
+**Solución:**
+```bash
+sudo apt install -y libpango-1.0-0 libharfbuzz0b libpangoft2-1.0-0 \
+    libharfbuzz-subset0 libffi-dev libjpeg-dev libopenjp2-7-dev
+```
+
+Verificar que weasyprint funciona:
+```bash
+source venv/bin/activate
+python3 -c "from weasyprint import HTML; print('OK')"
+```
+
+---
+
 ### El servicio falla con `status=217/USER`
 
 ```bash
@@ -743,9 +978,33 @@ sudo ip addr del 192.168.4.1/24 dev wlan0
 
 ---
 
+### El audio de prueba no se puede reproducir en el historial
+
+**Síntoma:** el botón ▶ aparece pero al presionarlo dice "No se pudo reproducir el audio."
+
+**Causa más probable:** el archivo WAV no existe en disco con el nombre correcto.
+
+**Verificar:**
+```bash
+ls recordings/<SESSION_ID>/
+# Los archivos deben tener el formato: <SESSION_ID>_<palabra_sin_tilde>.wav
+# Ejemplo correcto: A1B2C3D4_mama.wav, A1B2C3D4_cafe.wav
+# Ejemplo incorrecto: A1B2C3D4_mamá.wav, item_00.wav
+```
+
+Si los archivos tienen tildes en el nombre, renombrarlos:
+```bash
+cd recordings/<SESSION_ID>
+for f in *_*.wav; do
+    # Renombrar manualmente si es necesario
+    mv "$f" "$(echo $f | iconv -f utf-8 -t ascii//TRANSLIT)"
+done
+```
+
+---
+
 ## TODOs pendientes
 
-- `app.py` ~línea 125: descomentar lanzamiento del pipeline en hilo
-- `api_report()`: reemplazar placeholder por PDF real (weasyprint o reportlab)
-- Base de datos SQLite para persistir sesiones y grabaciones entre reinicios
+- `app.py` ~línea 154: descomentar lanzamiento del pipeline en hilo
+- `api_report()`: reemplazar placeholder por PDF real usando `report_html.py` + weasyprint
 - Panel de dispositivo: campo para cambiar SSID/contraseña del modo dev sin editar archivos
